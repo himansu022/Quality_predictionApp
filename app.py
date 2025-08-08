@@ -4,6 +4,33 @@ import numpy as np
 import pickle
 import os
 from datetime import datetime
+import time  # Added for keep-alive functionality
+
+# --- PRE-LOAD MODELS ---
+@st.cache_resource
+def load_all_models():
+    """Cache all models at startup to prevent reloading"""
+    model_dict = {}
+    for target in ["quality1", "quality2"]:
+        for diameter in [10, 12, 16]:
+            try:
+                model_filename = f"models/{target}_d{diameter}.pkl"
+                if os.path.exists(model_filename):
+                    with open(model_filename, "rb") as f:
+                        model_dict[f"{target}_{diameter}"] = pickle.load(f)
+            except Exception as e:
+                print(f"Error loading {model_filename}: {str(e)}")
+    return model_dict
+
+# Pre-load models when app starts
+if 'models' not in st.session_state:
+    st.session_state.models = load_all_models()
+
+# Keep-alive tracking
+if 'last_activity' not in st.session_state:
+    st.session_state.last_activity = time.time()
+else:
+    st.session_state.last_activity = time.time()
 
 # --- PAGE CONFIG ---
 st.set_page_config(
@@ -488,13 +515,13 @@ with tabs[0]:
     with predict_col:
         if st.button("🤖 Predict Quality", use_container_width=True):
             try:
-                model_filename = f"models/{target.lower()}_d{diameter}.pkl"
-                if not os.path.exists(model_filename):
-                    st.error(f"❌ Model not found: {model_filename}")
+                model_key = f"{target.lower()}_d{diameter}"
+                model = st.session_state.models.get(model_key)
+
+                if model is None:
+                    st.error(f"❌ Model not found for {target} and diameter {diameter}mm")
                 else:
                     with st.spinner("🔍 Analyzing parameters..."):
-                        with open(model_filename, "rb") as f:
-                            model = pickle.load(f)
                         input_dict = {k: [v] for k, v in {
                             **chem_inputs,
                             **temp_inputs,
@@ -700,4 +727,3 @@ st.markdown(f"""
     🔩 Rebar Quality Prediction App • Version 2.1 • Designed by <strong>Himansu</strong>
 </div>
 """, unsafe_allow_html=True)
-
