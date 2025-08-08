@@ -4,33 +4,45 @@ import numpy as np
 import pickle
 import os
 from datetime import datetime
-import time  # Added for keep-alive functionality
+import time
 
-# --- PRE-LOAD MODELS ---
+# --- MODEL LOADING WITH ERROR HANDLING ---
 @st.cache_resource
 def load_all_models():
-    """Cache all models at startup to prevent reloading"""
+    """Cache all models at startup with proper error handling"""
     model_dict = {}
-    for target in ["quality1", "quality2"]:
-        for diameter in [10, 12, 16]:
-            try:
-                model_filename = f"models/{target}_d{diameter}.pkl"
-                if os.path.exists(model_filename):
-                    with open(model_filename, "rb") as f:
-                        model_dict[f"{target}_{diameter}"] = pickle.load(f)
-            except Exception as e:
-                print(f"Error loading {model_filename}: {str(e)}")
+    model_files = [
+        "quality1_d10.pkl", "quality1_d12.pkl", "quality1_d16.pkl",
+        "quality2_d10.pkl", "quality2_d12.pkl", "quality2_d16.pkl"
+    ]
+    
+    # Create models directory if it doesn't exist
+    os.makedirs("models", exist_ok=True)
+    
+    for filename in model_files:
+        try:
+            model_path = os.path.join("models", filename)
+            if os.path.exists(model_path):
+                with open(model_path, "rb") as f:
+                    # Extract model key from filename (e.g., "quality1_d10")
+                    key = filename.split('.')[0]
+                    model_dict[key] = pickle.load(f)
+                    print(f"✅ Loaded model: {key}")
+            else:
+                print(f"⚠️ Model file not found: {model_path}")
+                # Create placeholder model if in debug mode
+                if st.session_state.get('debug_mode', False):
+                    from sklearn.ensemble import RandomForestRegressor
+                    model_dict[key] = RandomForestRegressor()
+                    print(f"⚠️ Created dummy model for: {key}")
+        except Exception as e:
+            print(f"❌ Error loading {filename}: {str(e)}")
+            if st.session_state.get('debug_mode', False):
+                from sklearn.ensemble import RandomForestRegressor
+                model_dict[key] = RandomForestRegressor()
+                print(f"⚠️ Created dummy model after error for: {key}")
+    
     return model_dict
-
-# Pre-load models when app starts
-if 'models' not in st.session_state:
-    st.session_state.models = load_all_models()
-
-# Keep-alive tracking
-if 'last_activity' not in st.session_state:
-    st.session_state.last_activity = time.time()
-else:
-    st.session_state.last_activity = time.time()
 
 # --- PAGE CONFIG ---
 st.set_page_config(
@@ -40,9 +52,23 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Initialize dark mode in session state
+# Initialize session state variables
 if 'dark_mode' not in st.session_state:
     st.session_state.dark_mode = False
+if 'history' not in st.session_state:
+    st.session_state.history = []
+if 'feedback_submitted' not in st.session_state:
+    st.session_state.feedback_submitted = False
+if 'debug_mode' not in st.session_state:
+    st.session_state.debug_mode = False
+if 'models' not in st.session_state:
+    st.session_state.models = load_all_models()
+
+# Keep-alive tracking
+if 'last_activity' not in st.session_state:
+    st.session_state.last_activity = time.time()
+else:
+    st.session_state.last_activity = time.time()
 
 # --- THEME TOGGLE FUNCTION ---
 def toggle_theme():
@@ -90,7 +116,7 @@ body {{
     font-family: 'Segoe UI', Arial, sans-serif !important;
 }}
 
-/* Enhanced TAB styling: edge-to-edge, bold, big font, equally spaced */
+/* Enhanced TAB styling */
 div[data-baseweb="tabs"] > div:first-child {{
     margin-left: 0 !important;
     margin-right: 0 !important;
@@ -136,8 +162,6 @@ button[data-baseweb="tab"]:hover {{
     padding-top: 20px;
     padding-bottom: 20px;
 }}
-
-/* Continuing all your previous CSS below — unchanged */
 
 #MainMenu {{visibility: hidden;}}
 footer {{visibility: hidden;}}
@@ -370,18 +394,6 @@ input:checked + .slider:before {{
 </style>
 """, unsafe_allow_html=True)
 
-# --- SESSION STATE ---
-if 'history' not in st.session_state:
-    st.session_state.history = []
-if 'feedback_submitted' not in st.session_state:
-    st.session_state.feedback_submitted = False
-if 'feedback_name' not in st.session_state:
-    st.session_state.feedback_name = ""
-if 'feedback_email' not in st.session_state:
-    st.session_state.feedback_email = ""
-if 'feedback_message' not in st.session_state:
-    st.session_state.feedback_message = ""
-
 # --- TITLE AND THEME TOGGLE ---
 header_col1, header_col2 = st.columns([6, 1])
 with header_col1:
@@ -402,10 +414,21 @@ with st.sidebar:
     with st.expander("⚙ Advanced Settings"):
         confidence_threshold = st.slider("Confidence Threshold", 0.7, 1.0, 0.85, 0.01,
                                        help="Set the minimum confidence level for predictions")
+        st.session_state.debug_mode = st.checkbox("Enable Debug Mode", value=False,
+                   help="Show additional technical details about the prediction")
         st.checkbox("Show Feature Importance", value=False,
                    help="Display which features most influence the prediction")
-        st.checkbox("Enable Debug Mode", value=False,
-                   help="Show additional technical details about the prediction")
+    
+    # Model status indicator
+    st.markdown("---")
+    loaded_models = len(st.session_state.models)
+    if loaded_models == 6:
+        st.success(f"✅ All models loaded ({loaded_models}/6)")
+    elif loaded_models > 0:
+        st.warning(f"⚠️ Partial models loaded ({loaded_models}/6)")
+    else:
+        st.error("❌ No models loaded!")
+    
     # --- Download Prediction History ---
     if st.session_state.history:
         st.markdown("---")
@@ -519,7 +542,14 @@ with tabs[0]:
                 model = st.session_state.models.get(model_key)
 
                 if model is None:
-                    st.error(f"❌ Model not found for {target} and diameter {diameter}mm")
+                    st.error(f"""
+                    ❌ Model not found for {target} and diameter {diameter}mm. 
+                    
+                    **Possible solutions:**
+                    1. Check if `models/{target.lower()}_d{diameter}.pkl` exists in your repository
+                    2. Verify the file naming matches exactly (e.g., `quality1_d10.pkl`)
+                    3. Ensure models are in the `models/` folder
+                    """)
                 else:
                     with st.spinner("🔍 Analyzing parameters..."):
                         input_dict = {k: [v] for k, v in {
@@ -532,13 +562,21 @@ with tabs[0]:
                         for g in ["GR1", "GR2", "GR3"]:
                             input_dict[f"GRADE_{g}"] = [1 if f"GRADE_{g}" == grade_key else 0]
                         input_df = pd.DataFrame(input_dict)
-                        expected_columns = getattr(model, "feature_names_in_", input_df.columns.tolist())
-                        for col in expected_columns:
-                            if col not in input_df.columns:
-                                input_df[col] = 0
-                        input_df = input_df[expected_columns]
+                        
+                        # Handle missing columns more gracefully
+                        expected_columns = getattr(model, "feature_names_in_", [])
+                        missing_cols = set(expected_columns) - set(input_df.columns)
+                        for col in missing_cols:
+                            input_df[col] = 0
+                        
+                        # Ensure correct column order
+                        input_df = input_df[expected_columns] if len(expected_columns) > 0 else input_df
+                        
+                        # Make prediction
                         prediction = model.predict(input_df)[0]
                         confidence = min(0.95 + np.random.random() * 0.05, 1.0)
+                        
+                        # Store results
                         st.session_state.history.insert(0, {
                             'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                             'diameter': diameter,
@@ -549,6 +587,8 @@ with tabs[0]:
                             'inputs': {**chem_inputs, **temp_inputs, **process_inputs, "SPEED": speed}
                         })
                         st.session_state.history = st.session_state.history[:10]
+
+                        # Display results
                         if confidence < confidence_threshold:
                             st.warning(f"⚠ Prediction confidence is {confidence:.0%} (below threshold)")
                         st.markdown(f'''
@@ -559,14 +599,25 @@ with tabs[0]:
                                 <small style="font-size: 16px; color: {TEXT_COLOR};">Confidence: {confidence:.0%}</small>
                             </div>
                         ''', unsafe_allow_html=True)
+                        
                         quality_thresholds = {"QUALITY1": 75, "QUALITY2": 80}.get(target, 75)
                         if prediction >= quality_thresholds:
                             st.success("✅ This batch meets quality standards")
                         else:
                             st.error("❌ This batch does NOT meet quality standards")
                         st.balloons()
+                        
             except Exception as e:
-                st.error(f"🚨 An error occurred:\n\n`{str(e)}`")
+                st.error(f"""
+                🚨 Prediction failed!
+                
+                **Error details:**
+                ```python
+                {str(e)}
+                ```
+                
+                Please check your input values and try again.
+                """)
     with reset_col:
         if st.button("🔄 Reset", use_container_width=True):
             st.rerun()
@@ -702,23 +753,12 @@ with tabs[4]:
     st.markdown("For feature requests, bugs, or support, please fill out the form below.")
 
     with st.form("feedback_form", clear_on_submit=True):
-        name = st.text_input("Name", value=st.session_state.feedback_name)
-        email = st.text_input("Email", value=st.session_state.feedback_email)
-        feedback = st.text_area("Your Message", value=st.session_state.feedback_message)
+        name = st.text_input("Name")
+        email = st.text_input("Email")
+        feedback = st.text_area("Your Message")
         submitted = st.form_submit_button("Submit")
         if submitted and feedback.strip():
             st.success("Thank you! Your feedback has been received.")
-            # Reset the feedback form fields after submit
-            st.session_state.feedback_name = ""
-            st.session_state.feedback_email = ""
-            st.session_state.feedback_message = ""
-            st.session_state.feedback_submitted = True
-        else:
-            # Update session state if user types but doesn't submit yet
-            st.session_state.feedback_name = name
-            st.session_state.feedback_email = email
-            st.session_state.feedback_message = feedback
-
     st.markdown('</div>', unsafe_allow_html=True)
 
 # --- FOOTER ---
